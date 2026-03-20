@@ -1,29 +1,35 @@
+import threading
+from flask import Flask
 import vk_api
 from vk_api.longpoll import VkLongPoll, VkEventType
 import requests
 import uuid
 import time
-import base64
+import os
 
 # ============================================
-# ТВОИ ДАННЫЕ (ВСТАВЬ СВОИ КЛЮЧИ!)
+# КЛЮЧИ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ (Render)
 # ============================================
-VK_TOKEN = "vk1.a.MtCUO7qanu5s82Dog_31mrxnBJ_PcIVtTBcjEWitUet04nkFuleIvUYz7JEWreZO-LiUhwB9nHDpC0iOiwl0f6buYScNZSxLcpsYw_EeOS5pB2GnUYsjMeh8GXGfSi4wSEVLpbtCNI4cRmiPzRFimAdew3ozOOn5wL2goa1wIRrgQOOWYMLeBjMI3kj0a7uSkR2iO2s6cBHOaPZe4jVsSg"
-
-CLIENT_ID = "019d09b9-52f0-7b15-90fe-c953e85f25cb"
-AUTH_KEY = "MDE5ZDA5YjktNTJmMC03YjE1LTkwZmUtYzk1M2U4NWYyNWNiOjcyM2QzODM2LTFlOWUtNGRiNy1iN2M5LWEwOWQ5NzcyZGZlMA=="
+VK_TOKEN = os.environ.get("VK_TOKEN", "")
+CLIENT_ID = os.environ.get("CLIENT_ID", "")
+AUTH_KEY = os.environ.get("AUTH_KEY", "")
 SCOPE = "GIGACHAT_API_PERS"
+
+# ============================================
+# Flask-приложение (чтобы Render не убивал бота)
+# ============================================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🚀 Алковоз работает! Рино на месте 🍷"
+
+# ============================================
+# ВЕСЬ КОД БОТА
 # ============================================
 
-# Авторизация ВК
-vk_session = vk_api.VkApi(token=VK_TOKEN)
-longpoll = VkLongPoll(vk_session)
-vk = vk_session.get_api()
-
-# Функция для получения токена GigaChat
 def get_gigachat_token():
     url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
-    
     headers = {
         "Authorization": f"Basic {AUTH_KEY}",
         "RqUID": str(uuid.uuid4()),
@@ -42,7 +48,6 @@ def get_gigachat_token():
         print(f"❌ Ошибка получения токена: {e}")
         return None
 
-# Функция для общения с GigaChat
 def ask_gigachat(user_message):
     token = get_gigachat_token()
     if not token:
@@ -212,52 +217,63 @@ def ask_gigachat(user_message):
             print(f"   Ответ сервера: {e.response.text}")
         return "🔺| Маскарад временно приостановлен... ◐ ⋮⋮"
 
-# Отправка сообщения в чат ВК
 def send_message(chat_id, text):
     try:
-        vk.messages.send(
-            chat_id=chat_id,
-            random_id=0,
-            message=text
-        )
+        vk = vk_api.VkApi(token=VK_TOKEN)
+        vk.method("messages.send", {"chat_id": chat_id, "message": text, "random_id": 0})
         print(f"✅ Отправлено в чат: {text[:50]}...")
     except Exception as e:
         print(f"❌ Ошибка отправки ВК: {e}")
 
-# Проверка токена ВК при запуске
 def check_vk_token():
     try:
-        vk.groups.getById()
+        vk = vk_api.VkApi(token=VK_TOKEN)
+        vk.method("groups.getById", {})
         print("✅ Токен ВК работает!")
         return True
     except Exception as e:
         print(f"❌ Токен ВК НЕ РАБОТАЕТ: {e}")
         return False
 
-# ЗАПУСК БОТА
-print("=" * 50)
-print("🚀 Рино - Хранительница АлкоПсихДесПансера")
-print("=" * 50)
-
-if not check_vk_token():
-    print("❌ Ошибка авторизации ВК. Проверь токен!")
-    exit()
-
-print("👂 Слушаю чаты ВКонтакте...")
-print("=" * 50)
-
-for event in longpoll.listen():
-    if event.type == VkEventType.MESSAGE_NEW and event.to_me:
-        if event.from_chat:
-            msg = event.text
-            chat_id = event.chat_id
-            user_id = event.user_id
-            
-            print(f"\n📨 Получено от {user_id} в чате {chat_id}: {msg}")
-            
-            if len(msg.strip()) < 1:
-                continue
+def run_bot():
+    print("=" * 50)
+    print("🚀 Рино - Хранительница АлкоПсихДесПансера")
+    print("=" * 50)
+    
+    if not check_vk_token():
+        print("❌ Ошибка авторизации ВК. Бот не запустится.")
+        return
+    
+    vk_session = vk_api.VkApi(token=VK_TOKEN)
+    longpoll = VkLongPoll(vk_session)
+    
+    print("👂 Слушаю чаты ВКонтакте...")
+    print("=" * 50)
+    
+    for event in longpoll.listen():
+        if event.type == VkEventType.MESSAGE_NEW and event.to_me:
+            if event.from_chat:
+                msg = event.text
+                chat_id = event.chat_id
+                user_id = event.user_id
                 
-            reply = ask_gigachat(msg)
-            send_message(chat_id, reply)
-            time.sleep(2)
+                print(f"\n📨 Получено от {user_id} в чате {chat_id}: {msg}")
+                
+                if len(msg.strip()) < 1:
+                    continue
+                    
+                reply = ask_gigachat(msg)
+                send_message(chat_id, reply)
+                time.sleep(2)
+
+# ============================================
+# ЗАПУСК (Flask + бот в отдельном потоке)
+# ============================================
+if __name__ == "__main__":
+    # Запускаем бота в фоновом потоке
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # Запускаем Flask-сервер
+    app.run(host="0.0.0.0", port=10000)
